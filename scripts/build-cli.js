@@ -47,7 +47,7 @@ try {
 
   // Step 4: Build the CLI application
   console.log('Building CLI application...');
-  execSync('pnpm exec esbuild src/cli.ts --bundle --platform=node --minify --tree-shaking=true --external:lru-cache --external:better-sqlite3 --outfile=dist/cli.js', {
+  execSync('pnpm exec esbuild src/cli.ts --bundle --platform=node --minify --tree-shaking=true --external:better-sqlite3 --outfile=dist/cli.js', {
     stdio: 'inherit',
     cwd: cliDir
   });
