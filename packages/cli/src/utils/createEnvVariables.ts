@@ -3,7 +3,6 @@ import { readConfigFile } from ".";
 const CLAUDE_AUTO_COMPACT_ENV = {
   CLAUDE_CODE_AUTO_COMPACT_WINDOW: "200000",
   CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "85",
-  CLAUDE_CODE_SIMPLE: "1",
 };
 
 function hasExtendedContext(familyConfig: any): boolean {

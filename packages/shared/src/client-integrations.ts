@@ -225,7 +225,6 @@ const CLAUDE_MODEL_ENV_KEYS = [
 const CLAUDE_AUTO_COMPACT_ENV = {
   CLAUDE_CODE_AUTO_COMPACT_WINDOW: "200000",
   CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "90",
-  CLAUDE_CODE_SIMPLE: "1",
 };
 
 // Default context window (in tokens) used to drive client-side auto-compaction
