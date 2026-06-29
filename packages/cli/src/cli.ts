@@ -4,6 +4,7 @@ import { showStatus } from "./utils/status";
 import { executeCodeCommand, PresetConfig } from "./utils/codeCommand";
 import {
   cleanupPidFile,
+  stopServiceProcess,
   isServiceRunning,
   getServiceInfo,
 } from "./utils/processCheck";
@@ -228,8 +229,14 @@ async function main() {
       try { await disableConfiguredClientsForStop(); } catch {}
       try {
         const pid = parseInt(readFileSync(PID_FILE, "utf-8"));
-        process.kill(pid);
-        cleanupPidFile();
+        if (isNaN(pid)) {
+          console.log(
+            "PID file was missing or invalid; cleaned up. Service was not running."
+          );
+          cleanupPidFile();
+          break;
+        }
+        const stopped = await stopServiceProcess(pid);
         if (existsSync(REFERENCE_COUNT_FILE)) {
           try {
             fs.unlinkSync(REFERENCE_COUNT_FILE);
@@ -237,9 +244,15 @@ async function main() {
             // Ignore cleanup errors
           }
         }
-        console.log(
-          "claude code router service has been successfully stopped."
-        );
+        if (stopped) {
+          console.log(
+            "claude code router service has been successfully stopped."
+          );
+        } else {
+          console.log(
+            "Service process did not exit after SIGKILL. PID file cleared; please investigate the stuck process manually."
+          );
+        }
       } catch (e) {
         console.log(
           "Failed to stop the service. It may have already been stopped."

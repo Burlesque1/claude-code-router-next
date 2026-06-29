@@ -18,7 +18,7 @@ import { writeFileSync, existsSync, readFileSync, mkdirSync } from "fs";
 import { checkForUpdates, performUpdate } from "./update";
 import { version } from "../../package.json";
 import { spawn } from "child_process";
-import {cleanupPidFile, isServiceRunning} from "./processCheck";
+import {cleanupPidFile, isServiceRunning, stopServiceProcess} from "./processCheck";
 
 // Function to interpolate environment variables in config values
 const interpolateEnvVars = (obj: any): any => {
@@ -220,11 +220,20 @@ export const run = async (args: string[] = []) => {
 }
 
 export const restartService = async () => {
-  // Stop the service if it's running
+  // Stop the service if it's running. Track whether the old process was
+  // confirmed gone: if it refused to die we must NOT spawn a new one, or the
+  // new process would collide with the still-held port (EADDRINUSE) — the
+  // exact failure this command exists to avoid.
+  let stopped: boolean | undefined;
   try {
     const pid = parseInt(readFileSync(PID_FILE, "utf-8"));
-    process.kill(pid);
-    cleanupPidFile();
+    if (isNaN(pid)) {
+      console.log("PID file was missing or invalid; cleaned up.");
+      cleanupPidFile();
+      stopped = true;
+    } else {
+      stopped = await stopServiceProcess(pid);
+    }
     if (existsSync(REFERENCE_COUNT_FILE)) {
       try {
         await fs.unlink(REFERENCE_COUNT_FILE);
@@ -232,10 +241,25 @@ export const restartService = async () => {
         // Ignore cleanup errors
       }
     }
-    console.log("claude code router service has been stopped.");
+    if (stopped) {
+      console.log("claude code router service has been stopped.");
+    } else {
+      console.log("Service process did not exit after SIGKILL. PID file cleared; please investigate the stuck process manually.");
+    }
   } catch (e) {
     console.log("Service was not running or failed to stop.");
     cleanupPidFile();
+    // Nothing was running, so it is safe to (re)start.
+    stopped = true;
+  }
+
+  // The old process is still alive and holding the port — bail out instead of
+  // spawning a duplicate that would fail to bind.
+  if (stopped === false) {
+    console.error(
+      "Cannot restart: the previous process is still alive and holding the port. Kill it manually, then run `ccr start`."
+    );
+    process.exit(1);
   }
 
   // Start the service again in the background

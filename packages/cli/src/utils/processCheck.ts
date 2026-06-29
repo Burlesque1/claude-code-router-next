@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { PID_FILE, REFERENCE_COUNT_FILE } from '@wengine-ai/claude-code-router-shared';
 import { readConfigFile } from '.';
 import find from 'find-process';
@@ -98,12 +98,85 @@ export function savePid(pid: number) {
 export function cleanupPidFile() {
     if (existsSync(PID_FILE)) {
         try {
-            const fs = require('fs');
-            fs.unlinkSync(PID_FILE);
+            unlinkSync(PID_FILE);
         } catch (e) {
             // Ignore cleanup errors
         }
     }
+}
+
+// Wait for a process to actually exit after signalling it. `process.kill(pid)`
+// only delivers the signal — it does not wait. The previous stop/restart code
+// deleted the PID file immediately after signalling, so if the process kept
+// running (e.g. stuck in `app.close()` with in-flight requests, or a signal
+// handler that never reached `process.exit`) we ended up with an orphaned
+// process still holding the port while the PID file was already gone. Every
+// later `ccr` invocation then misjudged the service as stopped and spawned a
+// new process that failed to bind the occupied port ("Service startup timeout").
+//
+// This function closes that race: it sends SIGTERM, polls `kill(pid, 0)` until
+// the process is truly gone (or the timeout lapses), escalates to SIGKILL if
+// needed, and only removes the PID file afterwards. Returns true when the
+// process is confirmed gone.
+export async function stopServiceProcess(
+    pid: number,
+    options: { timeoutMs?: number; pollIntervalMs?: number } = {}
+): Promise<boolean> {
+    const timeoutMs = options.timeoutMs ?? 8000;
+    const pollIntervalMs = options.pollIntervalMs ?? 100;
+
+    const isAlive = () => {
+        try {
+            process.kill(pid, 0);
+            return true;
+        } catch {
+            return false;
+        }
+    };
+
+    if (!isAlive()) {
+        cleanupPidFile();
+        return true;
+    }
+
+    try {
+        process.kill(pid, 'SIGTERM');
+    } catch {
+        // Already gone between the check and the signal.
+        cleanupPidFile();
+        return true;
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+        if (!isAlive()) {
+            cleanupPidFile();
+            return true;
+        }
+    }
+
+    // SIGTERM did not bring it down within the timeout — force kill.
+    try {
+        process.kill(pid, 'SIGKILL');
+    } catch {
+        cleanupPidFile();
+        return true;
+    }
+
+    // Give the kernel a brief moment to reap it.
+    for (let i = 0; i < 20; i++) {
+        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+        if (!isAlive()) {
+            cleanupPidFile();
+            return true;
+        }
+    }
+
+    // Still alive even after SIGKILL — best effort, clear the stale file so a
+    // later start can proceed (operator should investigate the stuck process).
+    cleanupPidFile();
+    return false;
 }
 
 export function getServicePid(): number | null {
@@ -143,12 +216,11 @@ export async function closeService() {
     if (referenceCount === 0) {
         const pid = getServicePid();
         if (pid && await isServiceRunning()) {
-            try {
-                // Kill the service process
-                process.kill(pid, 'SIGTERM');
-            } catch (e) {
-                // Ignore kill errors
-            }
+            // Wait for the process to actually exit before returning, so the
+            // service cannot be left behind as an orphan still holding the port
+            // after the CLI exits (the same race fixed in stop/restart via
+            // stopServiceProcess).
+            await stopServiceProcess(pid);
         }
     }
 }
